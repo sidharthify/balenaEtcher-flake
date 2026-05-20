@@ -44,6 +44,13 @@ let
   #           nix-prefetch-url --type sha256 \
   #             https://github.com/balena-io/etcher/releases/download/v${version}/balena-etcher_${version}_amd64.deb
 
+  # Library path for the etcher-util ld-linux wrapper (see postFixup).
+  runtimeLibPath = lib.makeLibraryPath [
+    gtk3 nss nspr atk at-spi2-atk cups libdrm libxkbcommon mesa
+    pango cairo libx11 libxcomposite libxdamage libxext libxfixes
+    libxrandr libxcb dbus alsa-lib expat glib gdk-pixbuf libGL systemd
+  ];
+
   desktopItem = makeDesktopItem {
     name            = "balena-etcher";
     desktopName     = "balenaEtcher";
@@ -138,6 +145,37 @@ stdenv.mkDerivation {
     done
 
     runHook postInstall
+  '';
+
+  # etcher-util is a pkg-built binary: it bundles a Node.js runtime with a
+  # virtual filesystem blob appended after the ELF sections. autoPatchelfHook
+  # rewrites those sections, shifting the blob and breaking the pkg offset
+  # calculation (manifests as "Pkg: Error reading from file").
+  # Solution: save the original, restore it in postFixup, then call it via
+  # the dynamic linker directly instead of patching the interpreter.
+  preFixup = ''
+    cp "$out/lib/balena-etcher/resources/etcher-util" \
+       "$TMPDIR/etcher-util-orig"
+  '';
+
+  postFixup = ''
+    install -m755 "$TMPDIR/etcher-util-orig" \
+      "$out/lib/balena-etcher/resources/etcher-util.real"
+
+    # Write a wrapper that invokes ld-linux with an explicit library path,
+    # so the binary loads correctly without needing its ELF headers patched.
+    cat > "$out/lib/balena-etcher/resources/etcher-util" << 'WRAPPER'
+#!/bin/sh
+exec @ld_linux@ \
+  --library-path "@lib_path@" \
+  "$(dirname "$0")/etcher-util.real" "$@"
+WRAPPER
+
+    substituteInPlace "$out/lib/balena-etcher/resources/etcher-util" \
+      --replace "@ld_linux@"  "${stdenv.cc.libc}/lib/ld-linux-x86-64.so.2" \
+      --replace "@lib_path@"  "${runtimeLibPath}"
+
+    chmod +x "$out/lib/balena-etcher/resources/etcher-util"
   '';
 
   ### metadata
