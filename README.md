@@ -71,5 +71,13 @@ Drops you into a shell with `nix-update` and `nvd` available.
 - Only **x86_64-linux** is supported
 - The application requires access to block devices; the NixOS module adds the appropriate udev rule
 
+## Packaging notes
+
+**`.deb` extraction:** `dpkg-deb` is not used for unpacking because it tries to restore the `setuid` bit on `chrome-sandbox`, which the Nix build sandbox disallows. Instead, the `.deb` is extracted with `ar | tar --zstd --no-same-permissions` to skip permission restoration.
+
+**`etcher-util` sidecar hack:** `etcher-util` is a [`pkg`](https://github.com/yao-pkg/pkg)-built binary: it bundles a full Node.js runtime with a virtual filesystem blob appended after the ELF sections. `autoPatchelfHook` rewrites those ELF sections to fix library paths, but in doing so it shifts the blob and breaks the offset calculation pkg uses to locate it at runtime (shows up as `Pkg: Error reading from file`).
+
+The workaround: the original binary is saved in `preFixup` before `autoPatchelfHook` touches it, then restored in `postFixup` as `etcher-util.real`. A shell wrapper replaces `etcher-util` and invokes the binary via `ld-linux` directly with an explicit `--library-path`, so it finds its shared libraries without needing its ELF headers patched.
+
 ## License
 GPL3
